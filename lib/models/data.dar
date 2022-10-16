@@ -1,0 +1,238 @@
+import 'dart:developer';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import './bill.dart';
+import './member.dart';
+import './payment.dart';
+
+class Data with ChangeNotifier {
+  List<Bill> _bills = [];
+  List<Bill> get bills => _bills;
+  List<Member> _members = [];
+  List<Member> get members => _members;
+  List<Payment> _payments = [];
+  List<Payment> get payments => _payments;
+
+  double _totalSpendings = 0;
+  double get totalSpendings => _totalSpendings;
+
+  final billList = 'https://billing-399ca-default-rtdb.firebaseio.com/bills';
+
+  Future<void> addBill(Bill bill) async {
+    final url = Uri.parse('$billList.json');
+    try {
+      await http.post(url, body: jsonEncode(bill.toMap())).then((response) {
+        var decoded = jsonDecode(response.body);
+        var newFile =
+            Bill(id: decoded['name'], title: bill.title, members: bill.members);
+        _bills.add(newFile);
+        notifyListeners();
+      });
+    } catch (e) {
+      log('add bill : $e');
+    }
+  }
+
+  Future<List<Bill>> fetchBills() async {
+    final url = Uri.parse('$billList.json');
+    try {
+      return await http.get(url).then((response) {
+        var decoded = jsonDecode(response.body);
+        if (decoded != null) {
+          List<Bill> newList = [];
+          decoded.forEach((key, value) {
+            var newFile = Bill.fromJson(key, value);
+            newList.add(newFile);
+          });
+          _bills = newList;
+        }
+        return _bills;
+      });
+    } catch (e) {
+      log('fetch bills: $e');
+      return [];
+    }
+  }
+
+  Future<void> updateMembersInBill(String billId, int members) async {
+    final url = Uri.parse('$billList/$billId.json');
+    try {
+      await http.patch(url, body: jsonEncode({'members': members})).then((_) {
+        _bills.firstWhere((element) => element.id == billId).members = members;
+        notifyListeners();
+      });
+    } catch (e) {
+      log('update members: $e');
+    }
+  }
+
+  Future<void> deleteBill(String billId) async {
+    final url = Uri.parse('$billList/$billId.json');
+    try {
+      await http.delete(url).then((_) {
+        _bills.removeWhere((element) => element.id == billId);
+        _members = [];
+        _payments = [];
+        notifyListeners();
+      });
+    } catch (e) {
+      log('delete payment: $e');
+    }
+  }
+
+  // member functions
+  Future<void> addMember(Member member) async {
+    final url = Uri.parse('$billList/${member.billId}/memberList.json');
+    try {
+      await http.post(url, body: jsonEncode(member.toMap())).then((response) {
+        var decoded = jsonDecode(response.body);
+        var newFile = Member(
+            id: decoded['name'],
+            billId: member.billId,
+            name: member.name,
+            totalSpent: member.totalSpent);
+        _members.add(newFile);
+        updateMembersInBill(member.billId, _members.length);
+        calculateTotalOfBill(member.billId);
+      });
+    } catch (e) {
+      log('add member : $e');
+    }
+  }
+
+  Future<List<Member>> fetchMembers(String billId) async {
+    final url = Uri.parse('$billList/$billId/memberList.json');
+    try {
+      return await http.get(url).then((response) {
+        var decoded = jsonDecode(response.body);
+        if (decoded != null) {
+          List<Member> newList = [];
+          decoded.forEach((key, value) {
+            var newFile = Member.fromJson(key, value);
+            newList.add(newFile);
+          });
+          _members = newList;
+          calculateTotalOfBill(billId);
+        }
+        return _members;
+      });
+    } catch (e) {
+      log('fetch members: $e');
+      return [];
+    }
+  }
+
+  Future<void> deleteMember(String memberId, String billId) async {
+    final url = Uri.parse('$billList/$billId/memberList/$memberId.json');
+    try {
+      await http.delete(url).then((_) {
+        _members.removeWhere((element) => element.id == memberId);
+        updateMembersInBill(billId, _members.length);
+        calculateTotalOfBill(billId);
+        _payments = [];
+      });
+    } catch (e) {
+      log('delete payment: $e');
+    }
+  }
+
+  Future<void> updateTotalSpentInMember(
+      String billId, String memberId, double amount) async {
+    final url = Uri.parse('$billList/$billId/memberList/$memberId.json');
+    try {
+      await http.patch(url, body: jsonEncode({'totalSpent': amount})).then((_) {
+        _members.firstWhere((element) => element.id == memberId).totalSpent =
+            amount;
+        notifyListeners();
+      });
+    } catch (e) {
+      log('update totalSpent: $e');
+    }
+  }
+
+  //
+  // payment funcitons
+  //
+
+  Future<void> addPayment(Payment payment) async {
+    final url = Uri.parse(
+        '$billList/${payment.billId}/memberList/${payment.memberId}/payments.json');
+    try {
+      await http.post(url, body: jsonEncode(payment.toMap())).then((response) {
+        var decoded = jsonDecode(response.body);
+        var newFile = Payment(
+            id: decoded['name'],
+            billId: payment.billId,
+            memberId: payment.memberId,
+            remark: payment.remark,
+            amount: payment.amount);
+        _payments.add(newFile);
+        double total = 0;
+        for (var i in _payments) {
+          total += i.amount;
+        }
+        updateTotalSpentInMember(payment.billId, payment.memberId, total);
+        calculateTotalOfBill(payment.billId);
+      });
+    } catch (e) {
+      log('add payment : $e');
+    }
+  }
+
+  Future<List<Payment>> fetchPaymentsByMember(
+      String billId, String memberId) async {
+    final url =
+        Uri.parse('$billList/$billId/memberList/$memberId/payments.json');
+
+    try {
+      return await http.get(url).then((response) {
+        var decoded = jsonDecode(response.body);
+        if (decoded != null) {
+          List<Payment> newList = [];
+          decoded.forEach((key, value) {
+            var newFile = Payment.fromJson(key, value);
+            newList.add(newFile);
+          });
+          _payments = newList;
+        }
+        return _payments;
+      });
+    } catch (e) {
+      log('fetch payments: $e');
+      return [];
+    }
+  }
+
+  Future<void> deletePayment(
+      String paymentId, String billId, String memberId) async {
+    final url = Uri.parse(
+        '$billList/$billId/memberList/$memberId/payments/$paymentId.json');
+    try {
+      await http.delete(url).then((_) {
+        _payments.removeWhere((element) => element.id == paymentId);
+        double total = 0;
+        for (var i in _payments) {
+          total += i.amount;
+        }
+        updateTotalSpentInMember(billId, memberId, total);
+        calculateTotalOfBill(billId);
+      });
+    } catch (e) {
+      log('delete payment: $e');
+    }
+  }
+
+  //
+  // helper
+  //
+
+  calculateTotalOfBill(String billId) {
+    double total = 0;
+    for (int i = 0; i < _members.length; i++) {
+      total += _members[i].totalSpent;
+    }
+    _totalSpendings = total;
+    notifyListeners();
+  }
+}
